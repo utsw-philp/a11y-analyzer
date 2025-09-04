@@ -1,4 +1,4 @@
-# **A11y Analyzer**
+# **A11y Accessibility Conformance Report (ACR) Analyzer**
 
 A web application to automatically analyze accessibility conformance reports (ACRs/VPATs) and generate a comprehensive risk evaluation.
 
