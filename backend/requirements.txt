@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+# AI & Document Processing Libraries
+PyMuPDF
+python-docx
+beautifulsoup4
+lxml
+pdfplumber

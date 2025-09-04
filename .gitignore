@@ -1,0 +1,75 @@
+# ===================================================================
+# General: IDE, OS, and other common files to ignore
+# ===================================================================
+
+# IDE/Editor specific files
+.idea/
+.vscode/
+*.sublime-workspace
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Log and temp files
+*.log
+*.tmp
+*.swp
+
+# ===================================================================
+# Python / FastAPI Backend
+# Located in the /backend directory
+# ===================================================================
+
+# Virtual Environment
+# This is the most important one for Python projects
+venv/
+.venv/
+env/
+.env/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+# Crucial for security - never commit secrets
+.env
+
+# Testing artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ===================================================================
+# Node.js / React / Vite Frontend
+# Located in the /frontend directory
+# =
+===================================================================
+
+# Dependencies
+# The most important one for Node.js projects
+node_modules/
+
+# Build output directory
+dist/
+
+# Vite-specific cache directory
+.vite/
+
+# Environment variables
+# Crucial for security - never commit API keys or secrets
+.env.local
+.env.*.local
+
+# Log files
+npm-debug.log*
+yarn-error.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Other common Node ignores
+.npm
+.pnp.*
