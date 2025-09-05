@@ -2,11 +2,19 @@
 
 A web application to automatically analyze accessibility conformance reports (ACRs/VPATs) and generate a comprehensive risk evaluation.
 
+Your A11y Analyzer now supports **three AI providers** for enhanced severity analysis:
+
+- 🤖 **Google Gemini** - Fast and efficient
+- 🔥 **OpenAI GPT-4** - Highly accurate reasoning
+- 🧠 **Anthropic Claude** - Excellent at nuanced analysis
+
 ## **About The Project**
 
 Manually reviewing accessibility reports is a time-consuming and error-prone process. The A11y Analyzer was built to solve this problem by providing a simple interface to upload a report and receive an instant, intelligent analysis.
 
 This tool ingests a report, uses a heuristic engine to identify key metadata, tallies conformance levels, and, most importantly, performs a severity analysis on identified accessibility gaps. The final output is a clean, shareable report that can be exported to HTML or PDF, empowering teams to quickly understand the accessibility posture of a product and prioritize remediation efforts.
+
+![Screenshot of the A11y Analyzer App](screenshot-app.jpeg)
 
 ## **Features**
 
@@ -86,6 +94,33 @@ You must have the following software installed:
 
    \# Install the required npm packages
    npm install
+
+4. Get API Keys
+
+   Google Gemini
+   1. Visit [Google AI Studio](https://aistudio.google.com/)
+   2. Click "Get API key"
+   3. Create/select project → "Create API key"
+   4. Copy the key (starts with `AIza...`)
+
+   OpenAI
+   1. Visit [OpenAI API Keys](https://platform.openai.com/api-keys)
+   2. Sign in and click "Create new secret key"
+   3. Copy the key (starts with `sk-...`)
+
+   Anthropic Claude
+   1. Visit [Anthropic Console](https://console.anthropic.com/)
+   2. Go to "API Keys" section
+   3. Click "Create Key"
+   4. Copy the key (starts with `sk-ant-...`)
+
+5. Configure API Keys
+   Create `.env` file in your backend directory:
+   ```env
+   GEMINI_API_KEY=AIza...your-gemini-key
+   OPENAI_API_KEY=sk-...your-openai-key
+   ANTHROPIC_API_KEY=sk-ant-...your-claude-key
+   ```
 
 ## **Usage**
 

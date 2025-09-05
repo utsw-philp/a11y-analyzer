@@ -1,11 +1,16 @@
 fastapi
 uvicorn[standard]
-python-dotenv
 python-multipart
-# AI & Document Processing Libraries
+python-dotenv
+
+# Document Processing Libraries
 PyMuPDF
 python-docx
 beautifulsoup4
 lxml
 pdfplumber
+
+# AI Provider Libraries
 google-generativeai
+openai>=1.0.0
+anthropic
