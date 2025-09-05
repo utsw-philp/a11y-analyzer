@@ -5,28 +5,45 @@ import re
 from datetime import datetime
 from io import BytesIO
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
+from enum import Enum
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- Document Parsing Libraries ---
 from bs4 import BeautifulSoup
 import docx
 import pdfplumber
 
-from dotenv import load_dotenv
-load_dotenv()
+# --- AI Provider Imports with Error Handling ---
+AI_PROVIDERS = {}
 
-# --- Gemini Import with Error Handling ---
+# Gemini
 try:
     import google.generativeai as genai
-    GEMINI_AVAILABLE = True
+    AI_PROVIDERS['gemini'] = True
 except ImportError:
-    GEMINI_AVAILABLE = False
-    print("Warning: google-generativeai not installed. AI analysis will be disabled.")
+    AI_PROVIDERS['gemini'] = False
+
+# OpenAI
+try:
+    from openai import OpenAI
+    AI_PROVIDERS['openai'] = True
+except ImportError:
+    AI_PROVIDERS['openai'] = False
+
+# Anthropic Claude
+try:
+    import anthropic
+    AI_PROVIDERS['claude'] = True
+except ImportError:
+    AI_PROVIDERS['claude'] = False
 
 app = FastAPI(
     title="A11y Analyzer API",
-    description="API for analyzing accessibility conformance reports with AI severity correction.",
-    version="2.1.0"
+    description="API for analyzing accessibility conformance reports with multiple AI providers.",
+    version="3.0.0"
 )
 
 # --- CORS Configuration ---
@@ -39,42 +56,117 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Gemini Configuration with Better Error Handling ---
-GEMINI_CONFIGURED = False
-if GEMINI_AVAILABLE:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if api_key:
+# --- AI Provider Configuration ---
+class AIProvider(str, Enum):
+    GEMINI = "gemini"
+    OPENAI = "openai"
+    CLAUDE = "claude"
+    FALLBACK = "fallback"
+
+class AIProviderManager:
+    def __init__(self):
+        self.providers = {}
+        self.configure_providers()
+
+    def configure_providers(self):
+        """Configure all available AI providers"""
+
+        # Configure Gemini
+        if AI_PROVIDERS['gemini'] and os.getenv("GEMINI_API_KEY"):
+            try:
+                genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+                self.providers['gemini'] = {
+                    'client': genai.GenerativeModel('gemini-1.5-flash'),
+                    'configured': True
+                }
+                print("✓ Gemini API configured successfully")
+            except Exception as e:
+                print(f"✗ Gemini configuration failed: {e}")
+                self.providers['gemini'] = {'configured': False, 'error': str(e)}
+
+        # Configure OpenAI
+        if AI_PROVIDERS['openai'] and os.getenv("OPENAI_API_KEY"):
+            try:
+                self.providers['openai'] = {
+                    'client': OpenAI(api_key=os.getenv("OPENAI_API_KEY")),
+                    'configured': True
+                }
+                print("✓ OpenAI API configured successfully")
+            except Exception as e:
+                print(f"✗ OpenAI configuration failed: {e}")
+                self.providers['openai'] = {'configured': False, 'error': str(e)}
+
+        # Configure Claude
+        if AI_PROVIDERS['claude'] and os.getenv("ANTHROPIC_API_KEY"):
+            try:
+                self.providers['claude'] = {
+                    'client': anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY")),
+                    'configured': True
+                }
+                print("✓ Claude API configured successfully")
+            except Exception as e:
+                print(f"✗ Claude configuration failed: {e}")
+                self.providers['claude'] = {'configured': False, 'error': str(e)}
+
+    def get_available_providers(self) -> List[str]:
+        """Get list of configured providers"""
+        return [name for name, config in self.providers.items() if config.get('configured', False)]
+
+    def get_preferred_provider(self) -> Optional[str]:
+        """Get the first available provider in order of preference"""
+        preference_order = ['claude', 'openai', 'gemini']
+        for provider in preference_order:
+            if provider in self.providers and self.providers[provider].get('configured', False):
+                return provider
+        return None
+
+    async def analyze_severity(self, criterion: str, remarks: str, fallback_severity: str, provider: Optional[str] = None) -> Dict:
+        """Analyze severity using specified provider or best available"""
+
+        if not provider:
+            provider = self.get_preferred_provider()
+
+        if not provider:
+            return {
+                "severity": fallback_severity,
+                "ai_corrected": False,
+                "correction_reason": "No AI providers configured",
+                "confidence": "fallback",
+                "provider_used": "none"
+            }
+
+        prompt = self._build_prompt(criterion, remarks, fallback_severity)
+
         try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            GEMINI_CONFIGURED = True
-            print("✓ Gemini API configured successfully")
+            if provider == 'gemini':
+                return await self._analyze_with_gemini(prompt, fallback_severity)
+            elif provider == 'openai':
+                return await self._analyze_with_openai(prompt, fallback_severity)
+            elif provider == 'claude':
+                return await self._analyze_with_claude(prompt, fallback_severity)
         except Exception as e:
-            print(f"✗ Gemini API configuration failed: {e}")
-    else:
-        print("✗ GEMINI_API_KEY environment variable not found")
-else:
-    print("✗ Gemini library not available")
+            print(f"AI analysis failed with {provider}: {e}")
+            # Try fallback to another provider
+            available = [p for p in self.get_available_providers() if p != provider]
+            if available:
+                print(f"Trying fallback provider: {available[0]}")
+                return await self.analyze_severity(criterion, remarks, fallback_severity, available[0])
 
-# --- Enhanced Severity Correction with Gemini ---
-async def correct_severity_with_ai(criterion: str, original_remarks: str, fallback_severity: str) -> Dict:
-    """Use Gemini specifically to review and correct severity based on remarks"""
-
-    if not GEMINI_CONFIGURED:
         return {
             "severity": fallback_severity,
             "ai_corrected": False,
-            "correction_reason": "Gemini API not available - using keyword-based analysis",
-            "confidence": "fallback"
+            "correction_reason": f"AI analysis failed: {str(e)[:100]}",
+            "confidence": "fallback",
+            "provider_used": "none"
         }
 
-    # Simplified prompt focused only on severity correction
-    prompt = f"""
-You are an accessibility expert reviewing WCAG conformance findings.
+    def _build_prompt(self, criterion: str, remarks: str, fallback_severity: str) -> str:
+        """Build standardized prompt for all AI providers"""
+        return f"""You are an accessibility expert reviewing WCAG conformance findings.
 Your task is to determine the correct severity level based on the remarks/explanation.
 
 WCAG Criterion: {criterion}
-Remarks/Explanation: "{original_remarks}"
+Remarks/Explanation: "{remarks}"
 Current Severity (keyword-based): {fallback_severity}
 
 Severity Definitions:
@@ -83,45 +175,80 @@ Severity Definitions:
 - Medium: Notable usability issues with workarounds (inconsistent behavior, unclear labels, minor contrast issues)
 - Low: Minor improvements, best practices (cosmetic issues, minor inconsistencies)
 
-Respond with ONLY this JSON format:
+Respond with ONLY a valid JSON object with these fields:
 {{
     "severity": "Critical|High|Medium|Low",
     "reason": "Brief explanation of why this severity is correct",
     "confidence": "high|medium|low"
 }}
-"""
 
-    try:
-        response = model.generate_content(prompt)
-        response_text = response.text.strip()
+Focus on real user impact for people with disabilities."""
 
-        # Clean JSON response
-        if response_text.startswith("```json"):
-            response_text = response_text[7:-3]
-        elif response_text.startswith("```"):
-            response_text = response_text[3:-3]
+    async def _analyze_with_gemini(self, prompt: str, fallback_severity: str) -> Dict:
+        """Analyze using Gemini"""
+        client = self.providers['gemini']['client']
+        response = client.generate_content(prompt)
+        result = self._parse_ai_response(response.text, fallback_severity)
+        result['provider_used'] = 'gemini'
+        return result
 
-        result = json.loads(response_text)
+    async def _analyze_with_openai(self, prompt: str, fallback_severity: str) -> Dict:
+        """Analyze using OpenAI"""
+        client = self.providers['openai']['client']
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+            temperature=0.1
+        )
+        result = self._parse_ai_response(response.choices[0].message.content, fallback_severity)
+        result['provider_used'] = 'openai'
+        return result
 
-        # Validate response
-        if "severity" not in result or result["severity"] not in ["Critical", "High", "Medium", "Low"]:
-            raise ValueError("Invalid severity in response")
+    async def _analyze_with_claude(self, prompt: str, fallback_severity: str) -> Dict:
+        """Analyze using Claude"""
+        client = self.providers['claude']['client']
+        response = client.messages.create(
+            model="claude-3-sonnet-20240229",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        result = self._parse_ai_response(response.content[0].text, fallback_severity)
+        result['provider_used'] = 'claude'
+        return result
 
-        return {
-            "severity": result["severity"],
-            "ai_corrected": result["severity"] != fallback_severity,
-            "correction_reason": result.get("reason", "AI analysis completed"),
-            "confidence": result.get("confidence", "medium")
-        }
+    def _parse_ai_response(self, response_text: str, fallback_severity: str) -> Dict:
+        """Parse AI response into standardized format"""
+        try:
+            # Clean response text
+            response_text = response_text.strip()
+            if response_text.startswith("```json"):
+                response_text = response_text[7:-3]
+            elif response_text.startswith("```"):
+                response_text = response_text[3:-3]
 
-    except Exception as e:
-        print(f"Gemini API call failed: {e}")
-        return {
-            "severity": fallback_severity,
-            "ai_corrected": False,
-            "correction_reason": f"AI analysis failed: {str(e)[:100]}",
-            "confidence": "fallback"
-        }
+            result = json.loads(response_text.strip())
+
+            # Validate response
+            if "severity" not in result or result["severity"] not in ["Critical", "High", "Medium", "Low"]:
+                raise ValueError("Invalid severity in response")
+
+            return {
+                "severity": result["severity"],
+                "ai_corrected": result["severity"] != fallback_severity,
+                "correction_reason": result.get("reason", "AI analysis completed"),
+                "confidence": result.get("confidence", "medium")
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to parse AI response: {e}")
+
+# Initialize AI provider manager
+ai_manager = AIProviderManager()
+
+# --- Enhanced Severity Analysis ---
+async def correct_severity_with_ai(criterion: str, original_remarks: str, fallback_severity: str, provider: Optional[str] = None) -> Dict:
+    """Use AI to review and correct severity based on remarks"""
+    return await ai_manager.analyze_severity(criterion, original_remarks, fallback_severity, provider)
 
 def _assign_severity_fallback(remarks: str) -> str:
     """Enhanced keyword-based severity analysis as fallback"""
@@ -130,7 +257,6 @@ def _assign_severity_fallback(remarks: str) -> str:
 
     remarks_lower = remarks.lower()
 
-    # Enhanced keyword patterns
     critical_patterns = [
         r'keyboard trap', r'not accessible.*keyboard', r'blocks.*screen reader',
         r'content disappears', r'no keyboard access', r'completely inaccessible',
@@ -149,15 +275,12 @@ def _assign_severity_fallback(remarks: str) -> str:
         r'partially.*accessible'
     ]
 
-    # Check patterns in order of severity
     for pattern in critical_patterns:
         if re.search(pattern, remarks_lower):
             return "Critical"
-
     for pattern in high_patterns:
         if re.search(pattern, remarks_lower):
             return "High"
-
     for pattern in medium_patterns:
         if re.search(pattern, remarks_lower):
             return "Medium"
@@ -190,8 +313,8 @@ def _extract_metadata(text: str):
         "report_age": report_age,
     }
 
-# --- Enhanced PDF Parser with Severity Correction ---
-async def parse_pdf_report(file_bytes: bytes):
+# --- Enhanced PDF Parser with Multi-AI Support ---
+async def parse_pdf_report(file_bytes: bytes, ai_provider: Optional[str] = None):
     detailed_findings = []
     summary = {"supports": 0, "partially_supports": 0, "does_not_support": 0, "not_applicable": 0}
     full_text = ""
@@ -222,11 +345,8 @@ async def parse_pdf_report(file_bytes: bytes):
                     clean_remarks = remarks.replace('\n',' ').strip()
 
                     if "partially supports" in level_lower or "does not support" in level_lower:
-                        # Get fallback severity first
                         fallback_severity = _assign_severity_fallback(clean_remarks)
-
-                        # Use AI to correct/verify severity
-                        ai_result = await correct_severity_with_ai(criterion, clean_remarks, fallback_severity)
+                        ai_result = await correct_severity_with_ai(criterion, clean_remarks, fallback_severity, ai_provider)
 
                         finding = {
                             "criterion": criterion.replace('\n',' '),
@@ -236,7 +356,8 @@ async def parse_pdf_report(file_bytes: bytes):
                             "original_severity": fallback_severity,
                             "ai_corrected": ai_result["ai_corrected"],
                             "correction_reason": ai_result["correction_reason"],
-                            "confidence": ai_result["confidence"]
+                            "confidence": ai_result["confidence"],
+                            "provider_used": ai_result["provider_used"]
                         }
 
                         detailed_findings.append(finding)
@@ -253,24 +374,27 @@ async def parse_pdf_report(file_bytes: bytes):
 
     metadata = _extract_metadata(full_text)
 
-    # Add AI analysis summary
     ai_corrections = sum(1 for f in detailed_findings if f["ai_corrected"])
+    providers_used = list(set(f["provider_used"] for f in detailed_findings if f["provider_used"] != "none"))
+
     metadata["ai_analysis_summary"] = {
         "total_analyzed": len(detailed_findings),
         "ai_corrections_made": ai_corrections,
-        "gemini_configured": GEMINI_CONFIGURED
+        "providers_configured": ai_manager.get_available_providers(),
+        "providers_used": providers_used,
+        "preferred_provider": ai_manager.get_preferred_provider()
     }
 
     return {**metadata, "summary": summary, "detailed_findings": detailed_findings}
 
 # --- Placeholder Parsers ---
-async def parse_docx_report(file_bytes: bytes):
+async def parse_docx_report(file_bytes: bytes, ai_provider: Optional[str] = None):
     doc = docx.Document(BytesIO(file_bytes))
     full_text = "\n".join([p.text for p in doc.paragraphs])
     metadata = _extract_metadata(full_text)
     return {**metadata, "summary": {}, "detailed_findings": []}
 
-async def parse_html_report(content: bytes):
+async def parse_html_report(content: bytes, ai_provider: Optional[str] = None):
     soup = BeautifulSoup(content, 'lxml')
     metadata = _extract_metadata(soup.get_text())
     return {**metadata, "summary": {}, "detailed_findings": []}
@@ -278,56 +402,69 @@ async def parse_html_report(content: bytes):
 # --- API Endpoints ---
 @app.get("/", tags=["General"])
 async def read_root():
-    return {
-        "message": "Welcome to the A11y Analyzer API with AI Severity Correction!",
-        "gemini_status": "configured" if GEMINI_CONFIGURED else "not configured"
-    }
+    available_providers = ai_manager.get_available_providers()
+    preferred_provider = ai_manager.get_preferred_provider()
 
-@app.get("/api/status", tags=["Debug"])
-async def get_status():
-    """Check API and Gemini status"""
     return {
-        "gemini_library_available": GEMINI_AVAILABLE,
-        "gemini_api_configured": GEMINI_CONFIGURED,
-        "api_key_length": len(os.getenv("GEMINI_API_KEY", "")),
-        "environment_variables": {
-            "GEMINI_API_KEY": "present" if os.getenv("GEMINI_API_KEY") else "missing"
+        "message": "Welcome to the A11y Analyzer API with Multi-AI Support!",
+        "ai_providers": {
+            "available": available_providers,
+            "preferred": preferred_provider,
+            "total_configured": len(available_providers)
         }
     }
 
-@app.post("/api/test-gemini", tags=["Debug"])
-async def test_gemini():
-    """Test Gemini API with a simple severity correction"""
-    if not GEMINI_CONFIGURED:
-        return {"error": "Gemini not configured"}
-
-    test_result = await correct_severity_with_ai(
-        "2.1.1 Keyboard",
-        "The submit button cannot be reached using keyboard navigation",
-        "Medium"
-    )
-    return {"test_result": test_result}
+@app.get("/api/ai-providers", tags=["AI Providers"])
+async def get_ai_providers():
+    """Get information about configured AI providers"""
+    return {
+        "available_providers": ai_manager.get_available_providers(),
+        "preferred_provider": ai_manager.get_preferred_provider(),
+        "provider_details": {
+            name: {
+                "configured": config.get('configured', False),
+                "library_available": AI_PROVIDERS.get(name, False),
+                "api_key_present": bool(os.getenv(f"{name.upper()}_API_KEY")) if name != 'claude' else bool(os.getenv("ANTHROPIC_API_KEY"))
+            }
+            for name, config in ai_manager.providers.items()
+        }
+    }
 
 @app.post("/api/analyze", tags=["Analysis"])
-async def analyze_report(file: UploadFile = File(...)):
+async def analyze_report(
+    file: UploadFile = File(...),
+    ai_provider: Optional[str] = None
+):
+    """Analyze report with optional AI provider specification"""
     allowed_extensions = {".pdf", ".docx", ".html"}
     file_extension = os.path.splitext(file.filename)[1].lower()
     if file_extension not in allowed_extensions:
         raise HTTPException(status_code=400, detail="Invalid file type.")
 
+    # Validate AI provider if specified
+    if ai_provider and ai_provider not in ai_manager.get_available_providers():
+        available = ai_manager.get_available_providers()
+        raise HTTPException(
+            status_code=400,
+            detail=f"AI provider '{ai_provider}' not available. Available providers: {available}"
+        )
+
     file_contents = await file.read()
     analysis_data = {}
 
     if file_extension == ".pdf":
-        analysis_data = await parse_pdf_report(file_contents)
+        analysis_data = await parse_pdf_report(file_contents, ai_provider)
     elif file_extension == ".docx":
-        analysis_data = await parse_docx_report(file_contents)
+        analysis_data = await parse_docx_report(file_contents, ai_provider)
     elif file_extension == ".html":
-        analysis_data = await parse_html_report(file_contents)
+        analysis_data = await parse_html_report(file_contents, ai_provider)
+
+    providers_used = analysis_data.get("ai_analysis_summary", {}).get("providers_used", [])
+    provider_text = f" using {', '.join(providers_used)}" if providers_used else ""
 
     return {
         "filename": file.filename,
         "content_type": file.content_type,
-        "status": "Analysis complete with AI severity correction." if GEMINI_CONFIGURED else "Analysis complete with keyword-based severity.",
+        "status": f"Analysis complete with AI enhancement{provider_text}." if providers_used else "Analysis complete with keyword-based severity.",
         "analysis_results": analysis_data
     }
