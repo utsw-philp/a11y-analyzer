@@ -14,6 +14,8 @@ Manually reviewing accessibility reports is a time-consuming and error-prone pro
 
 This tool ingests a report, uses a heuristic engine to identify key metadata, tallies conformance levels, and, most importantly, performs a severity analysis on identified accessibility gaps. The final output is a clean, shareable report that can be exported to HTML or PDF, empowering teams to quickly understand the accessibility posture of a product and prioritize remediation efforts.
 
+![Screenshot of the A11y Analyzer App](screenshot-app.jpeg)
+
 ## **Features**
 
 * **Multi-format Upload:** Ingests accessibility reports in PDF, DOCX, and HTML formats.
